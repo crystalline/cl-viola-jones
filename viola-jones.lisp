@@ -10,17 +10,6 @@
 (def face-dir "/media/data1000/Projects/AI_ML/facrec/faces")
 (def face-desc "/media/data1000/Projects/AI_ML/facrec/faces/faces_location.txt")
 
-(defun file->string (path)
-  (with-open-file (stream path)
-    (let ((data (make-string (file-length stream))))
-      (read-sequence data stream)
-      data)))
-
-(defun join (&rest args)
-  (apply #'concatenate 'string args))
-
-(defun rangep (x range)
-  (and (>= x (car range)) (<= x (cadr range))))
 
 (defun copy-array (array &key
                    (element-type (array-element-type array))
