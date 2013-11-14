@@ -2,15 +2,15 @@
 ;Training and detecting faces in pictures
 
 (ql:quickload 'opticl)
-(ql:quickload 'cl-ppcre)
 (ql:quickload 'lparallel)
+(ql:quickload 'cl-store)
 
 (defmacro def (&rest args) `(defparameter ,@args))
 
 (def face-dir "/media/data1000/Projects/AI_ML/facrec/faces")
 (def face-desc "/media/data1000/Projects/AI_ML/facrec/faces/faces_location.txt")
 
-(defun file-string (path)
+(defun file->string (path)
   (with-open-file (stream path)
     (let ((data (make-string (file-length stream))))
       (read-sequence data stream)
@@ -21,6 +21,24 @@
 
 (defun rangep (x range)
   (and (>= x (car range)) (<= x (cadr range))))
+
+(defun copy-array (array &key
+                   (element-type (array-element-type array))
+                   (fill-pointer (and (array-has-fill-pointer-p array)
+                                      (fill-pointer array)))
+                   (adjustable (adjustable-array-p array)))
+  "Returns an undisplaced copy of ARRAY, with same fill-pointer and
+adjustability (if any) as the original, unless overridden by the keyword
+arguments."
+  (let* ((dimensions (array-dimensions array))
+         (new-array (make-array dimensions
+                                :element-type element-type
+                                :adjustable adjustable
+                                :fill-pointer fill-pointer)))
+    (dotimes (i (array-total-size array))
+      (setf (row-major-aref new-array i)
+            (row-major-aref array i)))
+    new-array))
 
 ;Multidimensional array slicer
 ;Example of array-slice call (array-slice a '((100 200) (200 300) 2 *))
@@ -40,11 +58,6 @@
                (index nil)
                (result nil))
           
-          (defun inc ()
-            (incf (aref index (- N 1)))
-            (when (>= (aref index (- N 1)) (aref limit (- N 1)))
-              (setf (aref index (- N 1))
-          
           (loop for d in dim
                 for r in slice
                 for i from 0 below (length dim) do
@@ -53,16 +66,31 @@
                         (setf (aref limit-r i) d))
                        ((integerp r)
                         (setf (aref limit-l i) r)
-                        (setf (aref limit-r i) r))
+                        (setf (aref limit-r i) (+ r 1)))
                        ((listp r)
                         (setf (aref limit-l i) (car r))
-                        (setf (aref limit-r i) (cadr r)))
+                        (setf (aref limit-r i) (+ (cadr r) 1)))
                        (t nil))))
           
-          (
-                    
+          (setf index (copy-array limit-l))
+          (setf result (make-array (map 'list (lambda (x y) (- x y)) limit-r limit-l)))
+          
+          (defun inc ()
+            (incf (aref index (- N 1)))
+            (when (>= (aref index (- N 1)) (aref limit-r (- N 1)))
+              (setf (aref index (- N 1)) (aref limit-l (- N 1)))
+              (let ((carry 1))
+                (loop for i from (- N 2) downto 0
+                      while (eq carry 1) do
+                      (incf (aref index i))
+                      (if (< (aref index i) (aref limit-r i))
+                          (setf carry 0)
+                        (setf (aref index i) (aref limit-l i)))))))
+                      
           (loop while (< (aref index 0) (aref limit 0)) do
-                (
+                (let ((dst-index (reduce #'+ (map 'vector #'-  index limit-l)))
+                      (src-index (reduce #'+ index)))
+                  (setf (row-major-aref result dst-index) (row-major-aref array src-index))))))))
           
                                                        
   
@@ -76,7 +104,7 @@
   (opticl:read-jpeg-file (join face-dir "/" "image_" (format nil "~4,'0d" i) ".jpg")))
 
 (defun load-face-db ()
-  (let* ((face-locs-file (file-string (open face-desc)))
+  (let* ((face-locs-file (file->string (open face-desc)))
          (face-locs (map 'vector
                          (lambda (x) (map 'vector #'floor x))
                          (read-from-string
