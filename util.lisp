@@ -11,6 +11,12 @@
 (defun rangep (x range)
   (and (>= x (car range)) (<= x (cadr range))))
 
+(defun build-list (N fn)
+  (let ((res nil))
+    (loop for i from 0 below N do
+          (push (funcall fn i) res))
+    res))
+
 (defun copy-array (array &key
                    (element-type (array-element-type array))
                    (fill-pointer (and (array-has-fill-pointer-p array)
@@ -81,7 +87,6 @@ arguments."
                             (setf (aref index i) (aref limit-l i))))))))
                       
           (loop while loop-flag do
-                (print index)
                 (let ((dst-index (reduce #'+ (map 'vector #'-  index limit-l)))
                       (src-index (reduce #'+ index)))
                   (setf (row-major-aref result dst-index) (row-major-aref array src-index)))

@@ -3,99 +3,47 @@
 
 (ql:quickload 'opticl)
 (ql:quickload 'lparallel)
-(ql:quickload 'cl-store)
+
+(setf lparallel:*kernel* (lparallel:make-kernel 5))
+
+(load "/media/data1000/Projects/AI_ML/facerec/util.lisp")
 
 (defmacro def (&rest args) `(defparameter ,@args))
 
-(def face-dir "/media/data1000/Projects/AI_ML/facrec/faces")
-(def face-desc "/media/data1000/Projects/AI_ML/facrec/faces/faces_location.txt")
-
-
-(defun copy-array (array &key
-                   (element-type (array-element-type array))
-                   (fill-pointer (and (array-has-fill-pointer-p array)
-                                      (fill-pointer array)))
-                   (adjustable (adjustable-array-p array)))
-  "Returns an undisplaced copy of ARRAY, with same fill-pointer and
-adjustability (if any) as the original, unless overridden by the keyword
-arguments."
-  (let* ((dimensions (array-dimensions array))
-         (new-array (make-array dimensions
-                                :element-type element-type
-                                :adjustable adjustable
-                                :fill-pointer fill-pointer)))
-    (dotimes (i (array-total-size array))
-      (setf (row-major-aref new-array i)
-            (row-major-aref array i)))
-    new-array))
-
-;Multidimensional array slicer
-;Example of array-slice call (array-slice a '((100 200) (200 300) 2 *))
-(defun array-slice (array slice)
-  (let ((dim (array-dimensions array)))
-    (if (and (eq (length dim) (length slice))
-             (every (lambda (d r) (cond (((eq r '*) t)
-                                         ((integerp r) (rangep r (list 0 d)))
-                                         ((and (listp r) (eq (length r 2)) (>= (car r) (cadr r)))
-                                          (and (rangep (car r) (list 0 d)) (rangep (cadr r) (list 0 d))))
-                                         (t nil))))
-                    dim slice))
-        (let* ((N (length dim))
-               (inc-index 0)
-               (limit-l (make-array N))
-               (limit-r (make-array N))
-               (index nil)
-               (result nil))
-          
-          (loop for d in dim
-                for r in slice
-                for i from 0 below (length dim) do
-                (cond (((eq r '*)
-                        (setf (aref limit-l i) 0)
-                        (setf (aref limit-r i) d))
-                       ((integerp r)
-                        (setf (aref limit-l i) r)
-                        (setf (aref limit-r i) (+ r 1)))
-                       ((listp r)
-                        (setf (aref limit-l i) (car r))
-                        (setf (aref limit-r i) (+ (cadr r) 1)))
-                       (t nil))))
-          
-          (setf index (copy-array limit-l))
-          (setf result (make-array (map 'list (lambda (x y) (- x y)) limit-r limit-l)))
-          
-          (defun inc ()
-            (incf (aref index (- N 1)))
-            (when (>= (aref index (- N 1)) (aref limit-r (- N 1)))
-              (setf (aref index (- N 1)) (aref limit-l (- N 1)))
-              (let ((carry 1))
-                (loop for i from (- N 2) downto 0
-                      while (eq carry 1) do
-                      (incf (aref index i))
-                      (if (< (aref index i) (aref limit-r i))
-                          (setf carry 0)
-                        (setf (aref index i) (aref limit-l i)))))))
-                      
-          (loop while (< (aref index 0) (aref limit 0)) do
-                (let ((dst-index (reduce #'+ (map 'vector #'-  index limit-l)))
-                      (src-index (reduce #'+ index)))
-                  (setf (row-major-aref result dst-index) (row-major-aref array src-index))))))))
-          
-                                                       
-  
-  
+(def face-dir "/media/data1000/Projects/AI_ML/facerec/faces")
+(def face-desc "/media/data1000/Projects/AI_ML/facerec/faces/faces_location.txt")
 
 (defun load-rect (image rect)
-  (let 
-  t)
+  (let ((img (array-slice image (list (list (elt rect 3) (elt rect 1))
+                                      (list (elt rect 0) (elt rect 2))
+                                      '*))))
+    (if img
+        (let* ((dim (array-dimensions img))
+               (result (make-array (list (elt dim 0) (elt dim 1)))))
+          (loop for i from 0 below (elt dim 0) do
+                (loop for j from 0 below (elt dim 1) do
+                      (let ((sum 0))
+                        (loop for k from 0 below (elt dim 2) do
+                              (incf sum (aref img i j k)))
+                        (setf (aref result i j) (floor (/ sum 3))))))
+          result)
+      (progn (print "Error, image rect is ot of range")
+             nil))))
 
 (defun load-image (i)
-  (opticl:read-jpeg-file (join face-dir "/" "image_" (format nil "~4,'0d" i) ".jpg")))
+  (let ((iname (join face-dir "/" "image_" (format nil "~4,'0d" i) ".jpg")))
+    (format t "Loading image ~s" iname)
+    (let ((res (opticl:read-jpeg-file iname)))
+      (if res
+          (progn (format t "Dim: ~a" (array-dimensions res))
+                 res)
+        (progn (format t "Error! Empty file ~s" iname)
+               nil)))))
 
 (defun load-face-db ()
   (let* ((face-locs-file (file->string (open face-desc)))
          (face-locs (map 'vector
-                         (lambda (x) (map 'vector #'floor x))
+                         (lambda (x) (map 'vector (lambda (elem) (abs (floor elem))) x))
                          (read-from-string
                           (join
                            "("
@@ -111,8 +59,12 @@ arguments."
                           face-locs))
          (N (length face-rects))
          (result (make-array N)))
-    (loop for i from 0 below N do
-          (setf (aref result i) (load-rect (load-image i) (aref face-rects i))))
+    (print "Loading image database")
+;    (lparallel:pmap 'vector (lambda (i)  (load-rect (load-image (+ i 1)) (aref face-rects i)))
+;          (build-list N (lambda (x) x)))))
+    (loop for i from 249 below N do
+          (print  (aref face-rects i))
+          (setf (aref result i) (load-rect (load-image (+ i 1)) (aref face-rects i))))
     result))
 
 (defun vec-normalize (vec)
