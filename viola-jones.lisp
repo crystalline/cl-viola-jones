@@ -1,8 +1,13 @@
 ;Viola-Jones face detector
 ;Training and detecting faces in pictures
 
-(ql:quickload 'opticl)
-(ql:quickload 'lparallel)
+;(ql:quickload 'opticl)
+;(ql:quickload 'lparallel)
+
+(defpackage :viola-jones
+  (:use :cl :opticl :lparallel))
+
+(in-package :viola-jones)
 
 (setf lparallel:*kernel* (lparallel:make-kernel 5))
 
@@ -13,20 +18,61 @@
 (def face-dir "/media/data1000/Projects/AI_ML/facerec/faces")
 (def face-desc "/media/data1000/Projects/AI_ML/facerec/faces/faces_location.txt")
 
+(defun reduce-image (fn start img)
+  (let* ((dim (array-dimensions img))
+         (height (elt dim 0))
+         (width (elt dim 1))
+         (sum start))
+  (loop for i from 0 below height do
+        (loop for j from 0 below width do
+              (setf sum (funcall fn sum (aref img i j)))))
+  sum))
+
+(defun img-mean (img)
+  (let ((N (reduce #'* (array-dimensions img))))
+    (/ (reduce-image #'+ 0 img) N)))
+
+(defun image-blit (src dst off-y off-x)
+  (let* ((dim (array-dimensions src))
+         (height (elt dim 0))
+         (width (elt dim 1)))
+    (loop for i from 0 below height do
+          (loop for j from 0 below width do
+                (setf (aref dst (+ i off-y) (+ j off-x))
+                      (aref src i j))))
+    dst))
+
+(defun scale-to-square (image side)
+  (let ((dim (array-dimensions image)))
+    (if (> (length dim) 2)
+        (progn
+          (print "Error! Not an image")
+          nil)
+      (let* ((maxdim (apply #'max dim))
+             (newdim (mapcar (lambda (x) (* x (/ side maxdim))) dim))
+             (result (make-array (list side side)
+                                 :element-type (array-element-type image)
+                                 :initial-element (floor (img-mean image)))))
+        (image-blit (opticl:resize-image image (elt newdim 0) (elt newdim 1))
+                    result
+                    (floor (/ (- side (elt newdim 0)) 2))
+                    (floor (/ (- side (elt newdim 1)) 2)))))))
+
 (defun load-rect (image rect)
   (let ((img (array-slice image (list (list (elt rect 3) (elt rect 1))
                                       (list (elt rect 0) (elt rect 2))
                                       '*))))
     (if img
         (let* ((dim (array-dimensions img))
-               (result (make-array (list (elt dim 0) (elt dim 1)))))
+               (result (make-array (list (elt dim 0) (elt dim 1))
+                                   :element-type (array-element-type img))))
           (loop for i from 0 below (elt dim 0) do
                 (loop for j from 0 below (elt dim 1) do
                       (let ((sum 0))
                         (loop for k from 0 below (elt dim 2) do
                               (incf sum (aref img i j k)))
                         (setf (aref result i j) (floor (/ sum 3))))))
-          result)
+          (scale-to-square result 32))
       (progn (print "Error, image rect is ot of range")
              nil))))
 
@@ -35,12 +81,12 @@
     (format t "Loading image ~s" iname)
     (let ((res (opticl:read-jpeg-file iname)))
       (if res
-          (progn (format t "Dim: ~a" (array-dimensions res))
+          (progn ;(format t "Dim: ~a" (array-dimensions res))
                  res)
         (progn (format t "Error! Empty file ~s" iname)
                nil)))))
 
-(defun load-face-db ()
+(defun load-face-db (&optional (range '(0 450)))
   (let* ((face-locs-file (file->string (open face-desc)))
          (face-locs (map 'vector
                          (lambda (x) (map 'vector (lambda (elem) (abs (floor elem))) x))
@@ -60,12 +106,32 @@
          (N (length face-rects))
          (result (make-array N)))
     (print "Loading image database")
-;    (lparallel:pmap 'vector (lambda (i)  (load-rect (load-image (+ i 1)) (aref face-rects i)))
-;          (build-list N (lambda (x) x)))))
-    (loop for i from 249 below N do
+    (loop for i from (elt range 0) below (elt range 1) do
           (print  (aref face-rects i))
           (setf (aref result i) (load-rect (load-image (+ i 1)) (aref face-rects i))))
     result))
+
+(defun prepare-face-db (folder)
+  (def faces (load-face-db))
+  (loop for img across faces
+        for i from 0 do
+        (when (arrayp img)
+          (write-png-file (pathname
+                           (join "/media/data1000/Projects/AI_ML/facerec/"
+                                 folder (format nil "//~s.png" i))) img))))
+
+(defun sum-image (img)
+  (let* ((dim (array-dimensions img))
+         (height (elt dim 0))
+         (width (elt dim 1))
+         (sum 0)
+         (result (make-array dim)))
+    (loop for i from 0 below height do
+          (loop for j from 0 below width do
+                (incf sum (aref img i j))
+                (setf (aref result i j) sum)))
+    result))
+    
 
 (defun vec-normalize (vec)
   (let ((sum (reduce #'+ vec)))

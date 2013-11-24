@@ -68,12 +68,14 @@ arguments."
                        (t nil)))
           
           (setf index (copy-array limit-l))
-          (setf result (make-array (map 'list (lambda (x y) (- x y)) limit-r limit-l)))
+          (setf result (make-array (map 'list (lambda (x y) (- x y)) limit-r limit-l)
+                                   :element-type (array-element-type array)))
+          (print (array-element-type array))
           
           (defun inc ()
             (incf (aref index (- N 1)))
             (when (>= (aref index (- N 1)) (aref limit-r (- N 1)))
-              (if (eq N 1)
+              (if (eq N 0)
                   (setf loop-flag nil)
                   (setf (aref index (- N 1)) (aref limit-l (- N 1))))
               (let ((carry 1))
@@ -87,14 +89,25 @@ arguments."
                             (setf (aref index i) (aref limit-l i))))))))
                       
           (loop while loop-flag do
-                (let ((dst-index (reduce #'+ (map 'vector #'-  index limit-l)))
-                      (src-index (reduce #'+ index)))
+                (let ((dst-index (apply #'array-row-major-index result (map 'list #'- index limit-l)))
+                      (src-index (apply #'array-row-major-index
+                                        array
+                                        (map 'list (lambda(x)x) index))))
                   (setf (row-major-aref result dst-index) (row-major-aref array src-index)))
                 (inc))
           
           result))))
 
-;(defun test-slicer ()
-;  (def a (make-array '(100 100 100)))
-;  (loop for i from 0 below 100 do
-;        (loop for j fr
+(defun test-slicer ()
+  (let ((N 4))
+    (def a (make-array (list N N N)))
+    (loop for i from 0 below N do
+          (loop for j from 0 below N do
+                (loop for k from 0 below N do
+                      (setf (aref a i j k) (+ i j k)))))
+    (def b (array-slice a (list '* '* '*)))
+    (print (array-dimensions a))
+    (print (array-dimensions b))
+    (print a)
+    (print b)
+    (format t "Equality test: ~s~%" (equal a b))))
