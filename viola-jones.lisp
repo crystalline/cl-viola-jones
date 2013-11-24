@@ -11,8 +11,6 @@
 
 (setf lparallel:*kernel* (lparallel:make-kernel 5))
 
-(load "/media/data1000/Projects/AI_ML/facerec/util.lisp")
-
 (defmacro def (&rest args) `(defparameter ,@args))
 
 (def face-dir "/media/data1000/Projects/AI_ML/facerec/faces")
@@ -58,10 +56,21 @@
                     (floor (/ (- side (elt newdim 0)) 2))
                     (floor (/ (- side (elt newdim 1)) 2)))))))
 
+(defun transform-rect (rect alpha beta delta-i delta-j)
+  (let* ((i-low (elt rect 3))
+         (i-high (elt rect 1))
+         (j-low (elt rect 0))
+         (j-high (elt rect 2))
+         (h (- i-high i-low))
+         (w (- j-high j-low))
+         (dh (floor (* alpha h)))
+         (dw (floor (* beta w))))
+    (list (list (+ i-low dh delta-i) (- (+ i-high delta-i) dh))
+          (list (+ j-low dw delta-j) (- (+ j-high delta-j) dw)))))
+
 (defun load-rect (image rect)
-  (let ((img (array-slice image (list (list (elt rect 3) (elt rect 1))
-                                      (list (elt rect 0) (elt rect 2))
-                                      '*))))
+  (let* ((slice (transform-rect rect 0.1 0.1 35 0))
+         (img (array-slice image (append slice (list '*)))))
     (if img
         (let* ((dim (array-dimensions img))
                (result (make-array (list (elt dim 0) (elt dim 1))
@@ -111,8 +120,8 @@
           (setf (aref result i) (load-rect (load-image (+ i 1)) (aref face-rects i))))
     result))
 
-(defun prepare-face-db (folder)
-  (def faces (load-face-db))
+(defun prepare-face-db (folder &optional (range '(0 450)))
+  (def faces (load-face-db range))
   (loop for img across faces
         for i from 0 do
         (when (arrayp img)
