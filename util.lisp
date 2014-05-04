@@ -1,3 +1,6 @@
+
+(in-package :viola-jones)
+
 ;Utilities for IO and array operations
 (defun file->string (path)
   (with-open-file (stream path)

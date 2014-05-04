@@ -5,5 +5,5 @@
   :author "Crystalline Emerald"
   :version "0.1"
   :depends-on (:opticl :lparallel)
-  :serial t
+  :serial nil
   :components ((:file "viola-jones") (:file "util")))

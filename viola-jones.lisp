@@ -72,8 +72,7 @@
   (let* ((slice (transform-rect rect 0.1 0.1 35 0))
          (img (array-slice image (append slice (list '*)))))
     (if img
-        (let* ((dim (array-dimensions img))
-               (result (make-array (list (elt dim 0) (elt dim 1))
+        (let* ((dim (array-dimensions img))               (result (make-array (list (elt dim 0) (elt dim 1))
                                    :element-type (array-element-type img))))
           (loop for i from 0 below (elt dim 0) do
                 (loop for j from 0 below (elt dim 1) do
@@ -81,7 +80,7 @@
                         (loop for k from 0 below (elt dim 2) do
                               (incf sum (aref img i j k)))
                         (setf (aref result i j) (floor (/ sum 3))))))
-          (scale-to-square result 32))
+          (scale-to-square result 64))
       (progn (print "Error, image rect is ot of range")
              nil))))
 
@@ -141,14 +140,31 @@
                 (setf (aref result i j) sum)))
     result))
     
-
 (defun vec-normalize (vec)
   (let ((sum (reduce #'+ vec)))
     (loop for i from 0 to (- (length vec) 1) do
           (setf (aref vec i) (/ (aref vec i) sum)))
     vec))
 
+;Rect is #(y x h w)
+(defun haar-horiz (image y x h w a theta)
+  (if (> (- (+ (aref image y x)
+               (aref image (+ y h) (+ x w)))
+            (+ (aref image y (+ x w))
+               (aref image (+ y h) w)))
+         theta)
+      1 -1))
+     
+  
+
 (defun find-haar-classifier (error-fn)
+    ;Error measure for weak classifiers of training process
+    ;Should return numeric classification error of weak-classifier on given dataset
+    (defun error-measure (weak-classifier)
+      (loop for i from 0 below N do
+            (* (aref weights i) (abs (- (funcall weak-classifier (aref example-vecs i))
+                                        (aref example-labels i))))))
+
   t)
 
 
@@ -171,14 +187,7 @@
          (weights (map 'vector (lambda (x)
                                  (if (eq x 1) (/ 1.0 (* 2.0 n-true)) (/ 1.0 (* 2.0 n-false))))
                        example-labels)))
-    
-    ;Error measure for weak classifiers of training process
-    ;Should return numeric classification error of weak-classifier on given dataset
-    (defun error-measure (weak-classifier)
-      (loop for i from 0 below N do
-            (* (aref weights i) (abs (- (funcall weak-classifier (aref example-vecs i))
-                                        (aref example-labels i))))))
-            
+  
     (loop for i from 0 below n-iter do
           
           ;Normalization of weights
@@ -188,7 +197,7 @@
           ;Classifier is a 4-list: (fn fn-builder params error)
           ;(funcall fn-builder params) dhould give fn
           ;error should be (error-measure fn)
-          (setf current-classifier (funcall #'find-weak-classfier #'error-measure))
+          (setf current-classifier (funcall #'find-weak-classfier example-vecs example-labels))
           (setf (aref classifiers i) current-classifier)
           (setf current-classifier-error (elt current-classifier 3))
           
