@@ -255,6 +255,8 @@
 (defun make-haar-feature (spec)
     (let* (;(w (if (assoc 'w spec) *image-size*))
            ;(h (if (assoc 'h spec) *image-size*))
+           (theta (cadr (assoc 'theta spec)))
+           (parity (cadr (assoc 'parity spec)))
            (img-type (cadr (assoc 'type spec)))
            (refs (append (apply #'append (mapcar #'gen-refs (cdr (assoc '+ spec))))
                          (mapcar (lambda (x) (if (eq '+ (car x)) (cons '- (cdr x)) (cons '+ (cdr x))))
@@ -273,7 +275,12 @@
            (append '(lambda (img))
                     (if img-type (list (list 'declare (list 'type img-type 'img))) nil)
                     (list (list 'let (mapcar (lambda (x) (list (elt x 1) (append '(aref img) (elt x 0)))) tempvars)
-                                (list '- (assoc '+ sum) (cons '+ (cdr (assoc '- sum)))))))))
+                                (let ((feature-expr (list '- (assoc '+ sum) (cons '+ (cdr (assoc '- sum))))))
+                                  (if (every #'numberp (list parity theta))
+                                      (if (> parity 0)
+                                        (list 'if (list '> feature-expr theta) 1 -1)
+                                        (list 'if (list '> feature-expr theta) -1 1))
+                                      feature-expr)))))))
 
 ;Test:
 ;(eval (make-haar-feature (cons (list 'type (type-of (elt training-objects 0))) '((w 32) (h 32) (+ (10 10 4 4)) (- (10 14 4 4))))))
@@ -349,9 +356,6 @@
             (list 'theta theta)
             (list 'error feature-error)))))
 
-(def *feature-cache* nil)
-(def *features* nil)
-
 ;Total features: 71831929
 ;features: c1:3351040 c2:3351040 c3:29321600 c4:35808256
 ;Target feature count: 200000
@@ -361,15 +365,16 @@
     `(when (< (random 1.0) ,p)
         ,@args))
 
-(def *features* nil)
+(def feature-specs nil)
 (def *fvec* nil)
 (def *fvalcache* nil)
 
-(def *prune-p* 0.000027)
+(def *prune-p* 0.00027)
 
-(defun build-features (filepath)
-    (let ((c1 0) (c2 0) (c3 0) (c4 0))
-    (with-open-file (stream filepath :direction :output :if-does-not-exist :create :if-exists :overwrite)
+(defun build-features ();(filepath)
+    (let ((c1 0) (c2 0) (c3 0) (c4 0)
+          (flist nil))
+    ;(with-open-file (stream filepath :direction :output :if-does-not-exist :create :if-exists :overwrite)
         (loop for i from 0 below *image-size* do
             (loop for j from 0 below *image-size* do
                 (format t "~s of ~s features ~s~%" (+ (* *image-size* i) j) (* *image-size* *image-size*) (+ c1 c2 c3 c4))
@@ -380,7 +385,7 @@
                                 (with-prob *prune-p*
                                     (incf c3 1)
                                     (push `((+ (,i ,j ,h ,w) (,i ,(+ j b) ,h ,(- w b)))
-                                            (- (,i ,(+ j a) ,h ,(- b a)))) *features*))))
+                                            (- (,i ,(+ j a) ,h ,(- b a)))) flist))))
                                     ;(format stream "~s~%" `((+ (,i ,j ,h ,w) (,i ,(+ j b) ,h ,(- w b)))
                                     ;                        (- (,i ,(+ j a) ,h ,(- b a))))))))
                         (loop for ti from 0 below h do
@@ -388,34 +393,36 @@
                                 (with-prob *prune-p*
                                     (incf c4 1)
                                     (push `((- (,i ,j ,ti ,tj) (,(+ i ti) ,(+ j tj) ,(- h ti) ,(- w tj)))
-                                            (+ (,i ,(+ j tj) ,ti ,(- w tj)) (,(+ i ti) ,j ,(- h ti) ,tj))) *features*))))
+                                            (+ (,i ,(+ j tj) ,ti ,(- w tj)) (,(+ i ti) ,j ,(- h ti) ,tj))) flist))))
                                     ;(format stream "~s~%" `((- (,i ,j ,ti ,tj) (,(+ i ti) ,(+ j tj) ,(- h ti) ,(- w tj)))
                                     ;                        (+ (,i ,(+ j tj) ,ti ,(- w tj)) (,(+ i ti) ,j ,(- h ti) ,tj)))))))
                         (loop for a from 0 below h do
                             (with-prob *prune-p*
                                 (incf c1 1)
                                 ;(format stream "~s~%" `((+ (,i ,j ,h ,w)) (- (,(+ i a) ,j ,(- h a) ,w))))))
-                                (push `((+ (,i ,j ,h ,w)) (- (,(+ i a) ,j ,(- h a) ,w))) *features*)))
+                                (push `((+ (,i ,j ,h ,w)) (- (,(+ i a) ,j ,(- h a) ,w))) flist)))
                         (loop for a from 0 below w do
                             (with-prob *prune-p*
                                 (incf c2 1)
                                 ;(format stream "~s~%" `((+ (,i ,j ,h ,w)) (- (,i ,(+ j a) ,h ,(- w a))))))))))))
-                                (push `((+ (,i ,j ,h ,w)) (- (,i ,(+ j a) ,h ,(- w a)))) *features*))))))))
+                                (push `((+ (,i ,j ,h ,w)) (- (,i ,(+ j a) ,h ,(- w a)))) flist)))))))
+    ;Convert to vector for fast access
+    (setf feature-specs (make-array (length flist)))
+    (loop for item in flist
+          for i from 0 do (setf (aref feature-specs i) item))
+    
     ;Compile features
-    (setf *fvec* (make-array (length *features*)))
+    (setf *fvec* (make-array (length feature-specs)))
+    
     (let ((count 0))
-        (loop for spec in *features*
-              for i from 0 do
-           (setf (aref *fvec* i) (eval (make-haar-feature spec)))
+        (loop for i from 0 below (length feature-specs) do
+           (setf (aref *fvec* i) (eval (make-haar-feature (aref feature-specs i))))
            (incf count)
            (print count)))
-;    (setf *fvec* (pmap 'vector (lambda (spec) (eval (make-haar-feature spec))) *features*))
     (format t "Total features c1 ~s c2 ~s c3 ~s c4 ~s~%" c1 c2 c3 c4)
     (+ c1 c2 c3 c4)))
 
-(load-training-dataset face-dir nonface-dir)
-
-(def *weights* (map 'vector (lambda (x) x) (build-list (length training-objects) (lambda (i) 1.0))))
+(load-training-dataset facedb-dir nonface-dir)
 
 (defun update-sum-cache (weights)
     (loop for elem across *fvalcache* do
@@ -437,27 +444,51 @@
                          (setf (aref S- i) (+ (aref weights (cdr (aref fvals i))) (aref S- (- i 1))))))))))
 
 (defun build-feature-cache ()
-    (let ((N (length training-objects)))
+    (let ((N (length training-objects))
+          (weights (map 'vector (lambda (x) x) (build-list (length training-objects) (lambda (i) (/ 1.0 (length training-objects)))))))
         (setf *fvalcache* (make-array (length *fvec*)))
         (loop for fn across *fvec*
               for i from 0 do
             (format t "Building feature cache for feature #~s~%" i)
-            (setf (aref *fvalcache* i) (vector (map 'vector #'cons (map 'vector (aref *fvec* i) training-objects)    ;Pairs of Feature value ( Object ) : Index
-                                                                   (build-list N (lambda (i) i)))
+            (setf (aref *fvalcache* i) (vector (sort (map 'vector #'cons (map 'vector (aref *fvec* i) training-objects)    ;Pairs of Feature value ( Object ) : Index
+                                                                         (build-list N (lambda (i) i)))
+                                                     (lambda (x y) (<= (car x) (car y))))
                                                (make-array N :element-type 'float :initial-element 0.0)   ;Sum of + labeled example's weights below current element
-                                               (make-array N :element-type 'float :initial-element 0.0))))) ;Sum of - labeled example's weights below current element
-    (update-sum-cache *weights*))
+                                               (make-array N :element-type 'float :initial-element 0.0)))) ;Sum of - labeled example's weights below current element
+    (update-sum-cache weights)))
 
+(defun find-best-haar-classifier (weights)
+    (update-sum-cache *weights*)
+    (let ((min-error 1.0)
+          (min-feature nil)
+          (theta 0)
+          (parity 1)
+          (n (length training-objects)))
+        (loop for f across *fvalcache*
+              for i from 0 do
+           (let ((fvals (elt f 0))
+                 (S+ (elt f 1))
+                 (S- (elt f 2))
+                 (T+ (aref (elt f 1) (- n 1)))
+                 (T- (aref (elt f 2) (- n 1))))
+             (loop for j below n do
+                (let ((err (+ (aref S+ j) (- T- (aref S- j)))))
+                    (when (> min-error err)
+                      (print err)
+                      (setf min-error err)
+                      (setf parity 1)
+                      (setf theta (car (aref fvals j)))
+                      (setf min-feature (append (list '(parity 1) (list 'theta theta)) (aref feature-specs i)))))
+                (let ((err (+ (aref S- j) (- T+ (aref S+ j)))))
+                    (when (> min-error err)
+                      (print err)
+                      (setf min-error err)
+                      (setf parity -1)
+                      (setf theta (car (aref fvals j)))
+                      (setf min-feature (append (list '(parity -1) (list 'theta theta)) (aref feature-specs i))))))))
+        (list min-error min-feature)))
 
-;(defun find-best-haar-classifier (weights)
-;    (let ((min-error 1.0))
-;        (loop for feature across *fvalcache*
-;              for i from 0 do
-;           (
-;  t)
-
-
-;(defun adaboost-train (example-vecs example-labels n-iter find-weak-classifier)
+;(defun haar-adaboost-train (example-vecs example-labels n-iter find-weak-classifier)
   ;Check arguments
 ;  (when (not (or (not (eq (length example-vecs) (length example-labels)))
 ;                 (not (equal (remove-duplicates example-labels) (vector 0 1)))

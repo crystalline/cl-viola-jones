@@ -6,4 +6,4 @@
   :version "0.1"
   :depends-on (:opticl :lparallel)
   :serial nil
-  :components ((:file "viola-jones") (:file "util")))
+  :components ((:file "util") (:file "viola-jones")))
