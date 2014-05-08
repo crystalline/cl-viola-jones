@@ -11,6 +11,14 @@
 (defun join (&rest args)
   (apply #'concatenate 'string args))
 
+(defun tree-replace (rules tree)
+  (if rules
+      (tree-replace (cdr rules)
+                    (subst (cadar rules)
+                           (caar rules)
+                           tree :test #'equal))
+      tree))
+
 (defun rangep (x range)
   (and (>= x (car range)) (<= x (cadr range))))
 
@@ -18,7 +26,7 @@
   (let ((res nil))
     (loop for i from 0 below N do
           (push (funcall fn i) res))
-    res))
+    (reverse res)))
 
 (defun copy-array (array &key
                    (element-type (array-element-type array))
