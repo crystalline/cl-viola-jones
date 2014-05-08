@@ -9,7 +9,7 @@
 
 (in-package :viola-jones)
 
-(declaim (optimize (speed 3) (safety 0)))
+;(declaim (optimize (speed 3) (safety 0)))
 
 (setf lparallel:*kernel* (lparallel:make-kernel 5))
 
@@ -268,8 +268,8 @@
                  (push (list ref (intern (string-upcase (format nil "ref~s" symcount)))) tempvars)
                  (incf symcount)))
            (setf sum (tree-replace tempvars sum))
-           (print sum)
-           (print tempvars)
+           ;(print sum)
+           ;(print tempvars)
            (append '(lambda (img))
                     (if img-type (list (list 'declare (list 'type img-type 'img))) nil)
                     (list (list 'let (mapcar (lambda (x) (list (elt x 1) (append '(aref img) (elt x 0)))) tempvars)
@@ -352,14 +352,20 @@
 (def *feature-cache* nil)
 (def *features* nil)
 
-;1023 of 1024, features: 71831929
-;Total features: c1:3351040 c2:3351040 c3:29321600 c4:35808256
-;:Target feature count: 200000
+;Total features: 71831929
+;features: c1:3351040 c2:3351040 c3:29321600 c4:35808256
+;Target feature count: 200000
 ;Pruning probability: 200000/72831929 = 1/364 = 0.0027
 
 (defmacro with-prob (p &rest args)
     `(when (< (random 1.0) ,p)
         ,@args))
+
+(def *features* nil)
+(def *fvec* nil)
+(def *fvalcache* nil)
+
+(def *prune-p* 0.000027)
 
 (defun build-features (filepath)
     (let ((c1 0) (c2 0) (c3 0) (c4 0))
@@ -367,42 +373,88 @@
         (loop for i from 0 below *image-size* do
             (loop for j from 0 below *image-size* do
                 (format t "~s of ~s features ~s~%" (+ (* *image-size* i) j) (* *image-size* *image-size*) (+ c1 c2 c3 c4))
-                (loop for h from 0 to (- *image-size* i) do
-                    (loop for w from 0 to (- *image-size* j) do
+                (loop for h from 0 to (- *image-size* i 1) do
+                    (loop for w from 0 to (- *image-size* j 1) do
                         (loop for a from 0 below w do
                             (loop for b from a below w do
-                                (with-prob 0.0027
+                                (with-prob *prune-p*
                                     (incf c3 1)
-                                    (format stream "~s~%" `((+ (,i ,j ,h ,w) (,i ,(+ j b) ,h ,(- w b)))
-                                                            (- (,i ,(+ j a) ,h ,(- b a))))))))
+                                    (push `((+ (,i ,j ,h ,w) (,i ,(+ j b) ,h ,(- w b)))
+                                            (- (,i ,(+ j a) ,h ,(- b a)))) *features*))))
+                                    ;(format stream "~s~%" `((+ (,i ,j ,h ,w) (,i ,(+ j b) ,h ,(- w b)))
+                                    ;                        (- (,i ,(+ j a) ,h ,(- b a))))))))
                         (loop for ti from 0 below h do
                             (loop for tj from 0 below w do
-                                (with-prob 0.0027
+                                (with-prob *prune-p*
                                     (incf c4 1)
-                                    (format stream "~s~%" `((- (,i ,j ,ti ,tj) (,(+ i ti) ,(+ j tj) ,(- h ti) ,(- w tj)))
-                                                            (+ (,i ,(+ j tj) ,ti ,(- w tj)) (,(+ i ti) ,j ,(- h ti) ,tj)))))))
+                                    (push `((- (,i ,j ,ti ,tj) (,(+ i ti) ,(+ j tj) ,(- h ti) ,(- w tj)))
+                                            (+ (,i ,(+ j tj) ,ti ,(- w tj)) (,(+ i ti) ,j ,(- h ti) ,tj))) *features*))))
+                                    ;(format stream "~s~%" `((- (,i ,j ,ti ,tj) (,(+ i ti) ,(+ j tj) ,(- h ti) ,(- w tj)))
+                                    ;                        (+ (,i ,(+ j tj) ,ti ,(- w tj)) (,(+ i ti) ,j ,(- h ti) ,tj)))))))
                         (loop for a from 0 below h do
-                            (with-prob 0.0027
+                            (with-prob *prune-p*
                                 (incf c1 1)
-                                (format stream "~s~%" `((+ (,i ,j ,h ,w)) (- (,(+ i a) ,j ,(- h a) ,w))))))
+                                ;(format stream "~s~%" `((+ (,i ,j ,h ,w)) (- (,(+ i a) ,j ,(- h a) ,w))))))
+                                (push `((+ (,i ,j ,h ,w)) (- (,(+ i a) ,j ,(- h a) ,w))) *features*)))
                         (loop for a from 0 below w do
-                            (with-prob 0.0027
+                            (with-prob *prune-p*
                                 (incf c2 1)
-                                (format stream "~s~%" `((+ (,i ,j ,h ,w)) (- (,i ,(+ j a) ,h ,(- w a))))))))))))
-    (format t "Total features c1~s c2~s c3~s c4~s~%" c1 c2 c3 c4)
+                                ;(format stream "~s~%" `((+ (,i ,j ,h ,w)) (- (,i ,(+ j a) ,h ,(- w a))))))))))))
+                                (push `((+ (,i ,j ,h ,w)) (- (,i ,(+ j a) ,h ,(- w a)))) *features*))))))))
+    ;Compile features
+    (setf *fvec* (make-array (length *features*)))
+    (let ((count 0))
+        (loop for spec in *features*
+              for i from 0 do
+           (setf (aref *fvec* i) (eval (make-haar-feature spec)))
+           (incf count)
+           (print count)))
+;    (setf *fvec* (pmap 'vector (lambda (spec) (eval (make-haar-feature spec))) *features*))
+    (format t "Total features c1 ~s c2 ~s c3 ~s c4 ~s~%" c1 c2 c3 c4)
     (+ c1 c2 c3 c4)))
 
-;(defun build-feature-cache
+(load-training-dataset face-dir nonface-dir)
 
-(defun find-haar-classifier ()
-    ;Error measure for weak classifiers of training process
-    ;Should return numeric classification error of weak-classifier on given dataset
-;    (defun error-measure (weak-classifier)
-;      (loop for i from 0 below N do
-;            (* (aref weights i) (abs (- (funcall weak-classifier (aref example-vecs i))
-;                                        (aref example-labels i))))))
+(def *weights* (map 'vector (lambda (x) x) (build-list (length training-objects) (lambda (i) 1.0))))
 
-  t)
+(defun update-sum-cache (weights)
+    (loop for elem across *fvalcache* do
+        (let ((fvals (elt elem 0))
+              (S+ (elt elem 1))
+              (S- (elt elem 2)))
+           ;Zero element
+           (if (> (aref training-labels (cdr (aref fvals 0))) 0.5)
+                  (progn (setf (aref S+ 0) (aref weights 0))
+                         (setf (aref S- 0) 0))
+                  (progn (setf (aref S+ 0) 0)
+                         (setf (aref S- 0) (aref weights 0))))
+           ;Rest
+           (loop for i from 1 below (length weights) do
+               (if (> (aref training-labels (cdr (aref fvals i))) 0.5)
+                  (progn (setf (aref S+ i) (+ (aref weights (cdr (aref fvals i))) (aref S+ (- i 1))))
+                         (setf (aref S- i) (aref S+ (- i 1))))
+                  (progn (setf (aref S+ i) (aref S+ (- i 1)))
+                         (setf (aref S- i) (+ (aref weights (cdr (aref fvals i))) (aref S- (- i 1))))))))))
+
+(defun build-feature-cache ()
+    (let ((N (length training-objects)))
+        (setf *fvalcache* (make-array (length *fvec*)))
+        (loop for fn across *fvec*
+              for i from 0 do
+            (format t "Building feature cache for feature #~s~%" i)
+            (setf (aref *fvalcache* i) (vector (map 'vector #'cons (map 'vector (aref *fvec* i) training-objects)    ;Pairs of Feature value ( Object ) : Index
+                                                                   (build-list N (lambda (i) i)))
+                                               (make-array N :element-type 'float :initial-element 0.0)   ;Sum of + labeled example's weights below current element
+                                               (make-array N :element-type 'float :initial-element 0.0))))) ;Sum of - labeled example's weights below current element
+    (update-sum-cache *weights*))
+
+
+;(defun find-best-haar-classifier (weights)
+;    (let ((min-error 1.0))
+;        (loop for feature across *fvalcache*
+;              for i from 0 do
+;           (
+;  t)
 
 
 ;(defun adaboost-train (example-vecs example-labels n-iter find-weak-classifier)
