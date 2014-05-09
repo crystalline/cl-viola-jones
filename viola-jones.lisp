@@ -13,8 +13,6 @@
 
 (setf lparallel:*kernel* (lparallel:make-kernel 5))
 
-(defmacro def (&rest args) `(defparameter ,@args))
-
 (def project-dir "/home/user/lisp/projects/cl-viola-jones/")
 (def face-dir "/home/user/lisp/projects/cl-viola-jones/faces")
 (def facedb-dir "/home/user/lisp/projects/cl-viola-jones/faces_dataset")
@@ -22,6 +20,9 @@
 (def nonface-src "/home/user/lisp/projects/cl-viola-jones/nonfaces_dataset/source.jpg")
 (def face-desc "/home/user/lisp/projects/cl-viola-jones/faces/faces_location.txt")
 (def *image-size* 32)
+
+(def label-face 1)
+(def label-nonface 0)
 
 (def training-objects nil)
 (def training-labels nil)
@@ -165,11 +166,11 @@
     (loop for imgpath in faces-paths
           for i from 0 do
           (setf (aref training-objects i) (sum-image (opticl:read-png-file imgpath)))
-          (setf (aref training-labels i) 1))
+          (setf (aref training-labels i) label-face))
     (loop for imgpath in nonfaces-paths
           for i from (length faces-paths) do
           (setf (aref training-objects i) (sum-image (opticl:read-png-file imgpath)))
-          (setf (aref training-labels i) -1))
+          (setf (aref training-labels i) label-nonface))
     t))
 
 ;Make n random ph x pw patches from input image and return them as a vector
@@ -255,6 +256,8 @@
 (defun make-haar-feature (spec)
     (let* (;(w (if (assoc 'w spec) *image-size*))
            ;(h (if (assoc 'h spec) *image-size*))
+           (positive-label (if (assoc 'positive-label spec) (cadr (assoc 'positive-label spec)) label-face))
+           (negative-label (if (assoc 'negative-label spec) (cadr (assoc 'negative-label spec)) label-nonface))
            (theta (cadr (assoc 'theta spec)))
            (parity (cadr (assoc 'parity spec)))
            (img-type (cadr (assoc 'type spec)))
@@ -278,8 +281,8 @@
                                 (let ((feature-expr (list '- (assoc '+ sum) (cons '+ (cdr (assoc '- sum))))))
                                   (if (every #'numberp (list parity theta))
                                       (if (> parity 0)
-                                        (list 'if (list '> feature-expr theta) 1 -1)
-                                        (list 'if (list '> feature-expr theta) -1 1))
+                                        (list 'if (list '> feature-expr theta) positive-label negative-label)
+                                        (list 'if (list '> feature-expr theta) negative-label positive-label))
                                       feature-expr)))))))
 
 ;Test:
@@ -366,10 +369,10 @@
         ,@args))
 
 (def feature-specs nil)
-(def *fvec* nil)
-(def *fvalcache* nil)
+(def feature-lambdas nil)
+(def feature-image-cache nil)
 
-(def *prune-p* 0.00027)
+(def *prune-p* 0.0001)
 
 (defun build-features ();(filepath)
     (let ((c1 0) (c2 0) (c3 0) (c4 0)
@@ -412,11 +415,11 @@
           for i from 0 do (setf (aref feature-specs i) item))
     
     ;Compile features
-    (setf *fvec* (make-array (length feature-specs)))
+    (setf feature-lambdas (make-array (length feature-specs)))
     
     (let ((count 0))
         (loop for i from 0 below (length feature-specs) do
-           (setf (aref *fvec* i) (eval (make-haar-feature (aref feature-specs i))))
+           (setf (aref feature-lambdas i) (eval (make-haar-feature (aref feature-specs i))))
            (incf count)
            (print count)))
     (format t "Total features c1 ~s c2 ~s c3 ~s c4 ~s~%" c1 c2 c3 c4)
@@ -425,7 +428,7 @@
 (load-training-dataset facedb-dir nonface-dir)
 
 (defun update-sum-cache (weights)
-    (loop for elem across *fvalcache* do
+    (loop for elem across feature-image-cache do
         (let ((fvals (elt elem 0))
               (S+ (elt elem 1))
               (S- (elt elem 2)))
@@ -443,28 +446,36 @@
                   (progn (setf (aref S+ i) (aref S+ (- i 1)))
                          (setf (aref S- i) (+ (aref weights (cdr (aref fvals i))) (aref S- (- i 1))))))))))
 
+(def start-weights (map 'vector (lambda (x) x) (build-list (length training-objects) (lambda (i) (/ 1.0 (length training-objects))))))
+
 (defun build-feature-cache ()
     (let ((N (length training-objects))
           (weights (map 'vector (lambda (x) x) (build-list (length training-objects) (lambda (i) (/ 1.0 (length training-objects)))))))
-        (setf *fvalcache* (make-array (length *fvec*)))
-        (loop for fn across *fvec*
+        (setf feature-image-cache (make-array (length feature-lambdas)))
+        (loop for fn across feature-lambdas
               for i from 0 do
             (format t "Building feature cache for feature #~s~%" i)
-            (setf (aref *fvalcache* i) (vector (sort (map 'vector #'cons (map 'vector (aref *fvec* i) training-objects)    ;Pairs of Feature value ( Object ) : Index
-                                                                         (build-list N (lambda (i) i)))
-                                                     (lambda (x y) (<= (car x) (car y))))
+            (setf (aref feature-image-cache i) (vector (sort (map 'vector #'cons (map 'vector (aref feature-lambdas i) training-objects)    ;Pairs of Feature value ( Object ) : Index
+                                                                                 (build-list N (lambda (i) i)))
+                                                       (lambda (x y) (<= (car x) (car y))))
                                                (make-array N :element-type 'float :initial-element 0.0)   ;Sum of + labeled example's weights below current element
                                                (make-array N :element-type 'float :initial-element 0.0)))) ;Sum of - labeled example's weights below current element
     (update-sum-cache weights)))
 
+(defun validate-classifier (fn)
+    (let ((err (/ (float (count-diff (map 'vector (elt res 0) training-objects) training-labels))
+                  (length training-objects))))
+       (format t "Validating classifier, ~s examples, total error: ~s~%"
+               (length training-objects) err)))
+
 (defun find-best-haar-classifier (weights)
-    (update-sum-cache *weights*)
+    (update-sum-cache weights)
     (let ((min-error 1.0)
           (min-feature nil)
           (theta 0)
           (parity 1)
           (n (length training-objects)))
-        (loop for f across *fvalcache*
+        (loop for f across feature-image-cache
               for i from 0 do
            (let ((fvals (elt f 0))
                  (S+ (elt f 1))
@@ -474,78 +485,78 @@
              (loop for j below n do
                 (let ((err (+ (aref S+ j) (- T- (aref S- j)))))
                     (when (> min-error err)
-                      (print err)
+                      ;(print err)
                       (setf min-error err)
                       (setf parity 1)
                       (setf theta (car (aref fvals j)))
                       (setf min-feature (append (list '(parity 1) (list 'theta theta)) (aref feature-specs i)))))
                 (let ((err (+ (aref S- j) (- T+ (aref S+ j)))))
                     (when (> min-error err)
-                      (print err)
+                      ;(print err)
                       (setf min-error err)
                       (setf parity -1)
                       (setf theta (car (aref fvals j)))
                       (setf min-feature (append (list '(parity -1) (list 'theta theta)) (aref feature-specs i))))))))
-        (list min-error min-feature)))
+        (print min-error)
+        (list min-error min-feature (eval (make-haar-feature min-feature)))))
 
-;(defun haar-adaboost-train (example-vecs example-labels n-iter find-weak-classifier)
+(defun haar-adaboost-train (example-vecs example-labels n-iter find-weak-classifier)
   ;Check arguments
-;  (when (not (or (not (eq (length example-vecs) (length example-labels)))
-;                 (not (equal (remove-duplicates example-labels) (vector 0 1)))
-;                 (not (eq 1 (length (remove-duplicates (map 'vector #'length example-vecs)))))))
-;    (print "Adaboost received incompatible arguments, aborting training")
-;    (return-from adaboost-train nil))
+  (when (not (or (not (eq (length example-vecs) (length example-labels)))
+                 (not (equal (remove-duplicates example-labels) (vector 0 1)))
+                 (not (eq 1 (length (remove-duplicates (map 'vector #'length example-vecs)))))))
+    (print "Adaboost received incompatible arguments, aborting training")
+    (return-from haar-adaboost-train nil))
 
   ;Train classifier
-;  (let* ((N (length example-vecs))
-;         (n-true (length (remove 0 example-labels)))
-;         (n-false (length (remove 1 example-labels)))
-;         (current-classifier nil)
-;         (current-classifier-error 0)
-;         (classifiers (make-array n-iter))
-;         (betas (make-array n-iter))
-;         (weights (map 'vector (lambda (x)
-;                                 (if (eq x 1) (/ 1.0 (* 2.0 n-true)) (/ 1.0 (* 2.0 n-false))))
-;                       example-labels)))
-;  
-;    (loop for i from 0 below n-iter do
-;          
-;          ;Normalization of weights
-;          (vec-normalize weights)
-;          
-;          ;Find weak classifier with lowest error
-;          ;Classifier is a 4-list: (fn fn-builder params error)
-;          ;(funcall fn-builder params) dhould give fn
-;          ;error should be (error-measure fn)
-;          (setf current-classifier (funcall #'find-weak-classfier example-vecs example-labels))
-;          (setf (aref classifiers i) current-classifier)
-;          (setf current-classifier-error (elt current-classifier 3))
-;          
-;          ;Save beta
-;          (setf (aref betas i)
-;                (/ current-classifier-error (- 1.0 current-classifier-error)))
-;          
-;          ;Update weights
-;          (loop for j from 0 below N do
-;                (let ((beta (aref betas i))
-;                      (example-error (abs (- (aref example-labels i)
-;                                             (funcall (car current-classifier) (aref example-vecs i))))))
-;                  (setf (aref weights j) (* (aref weights j)
-;                                            (expt beta (- 1.0 example-error)))))))
-;    
-;    ;Return strong classifier as vector
-;    (vector (lambda (x)
-;              (let ((left-sum 0)
-;                    (right-sum 0))
-;                (loop for i from 0 below n-iter do
-;                      (let ((alpha (log (/ 1.0 (aref betas i)))))
-;                        (incf left-sum (* alpha  (funcall (car (aref classifiers i)) x)))
-;                        (incf right-sum alpha))
-;                      (if (>= left-sum (* 0.5 right-sum))
-;                        1
-;                        0))))
-;            classifiers
-;            betas)))
+  (let* ((N (length example-vecs))
+         (n-true (length (remove 0 example-labels)))
+         (n-false (length (remove 1 example-labels)))
+         (current-classifier nil)
+         (current-classifier-error 0)
+         (current-classifier-fn nil)
+         (classifiers (make-array n-iter))
+         (betas (make-array n-iter))
+         (weights (map 'vector (lambda (x)
+                                 (if (eq x 1) (/ 1.0 (* 2.0 n-true)) (/ 1.0 (* 2.0 n-false))))
+                       example-labels)))
+  
+    (loop for i from 0 below n-iter do
+          
+          ;Normalization of weights
+          (vec-normalize weights)
+          
+          ;Find weak classifier with lowest error
+          (setf current-classifier (funcall find-weak-classifier weights))
+          (setf current-classifier-fn (elt current-classifier 2))
+          (setf (aref classifiers i) current-classifier)
+          (setf current-classifier-error (elt current-classifier 0))
+          
+          ;Save beta
+          (setf (aref betas i)
+                (/ current-classifier-error (- 1.0 current-classifier-error)))
+          
+          ;Update weights
+          (loop for j from 0 below N do
+                (let ((beta (aref betas i))
+                      (example-error (abs (- (aref example-labels j)
+                                             (funcall current-classifier-fn (aref example-vecs j))))))
+                  (setf (aref weights j) (* (aref weights j)
+                                            (expt beta (- 1.0 example-error)))))))
+    
+    ;Return strong classifier as vector
+    (vector (lambda (x)
+              (let ((left-sum 0)
+                    (right-sum 0))
+                (loop for i from 0 below n-iter do
+                      (let ((alpha (log (/ 1.0 (aref betas i)))))
+                        (incf left-sum (* alpha (funcall (elt (aref classifiers i) 2) x)))
+                        (incf right-sum alpha)))
+                (if (>= left-sum (* 0.5 right-sum))
+                    1
+                    0)))
+            classifiers
+            betas)))
 
 
           

@@ -1,6 +1,8 @@
 
 (in-package :viola-jones)
 
+(defmacro def (&rest args) `(defparameter ,@args))
+
 ;Utilities for IO and array operations
 (defun file->string (path)
   (with-open-file (stream path)
